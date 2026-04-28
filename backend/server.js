@@ -4,6 +4,8 @@ const fs = require('fs');
 const path = require('path');
 const app = express();
 
+app.set('trust proxy', 1);
+
 const API_KEY = process.env.API_KEY || 'test-key';
 
 function requireApiKey(req, res, next) {
