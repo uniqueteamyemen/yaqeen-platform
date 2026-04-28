@@ -1,6 +1,16 @@
 const express = require('express');
 const app = express();
 
+const API_KEY = process.env.API_KEY || 'test-key';
+
+function requireApiKey(req, res, next) {
+  const key = req.headers['x-api-key'];
+  if (key !== API_KEY) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+}
+
 app.use(express.json({
   verify: (req, res, buf, encoding) => {
     try {
@@ -12,7 +22,11 @@ app.use(express.json({
   }
 }));
 
+app.use(express.static('public'));
+
 const PAYLOCK_URL = process.env.PAYLOCK_URL || 'https://paylock-core-production.up.railway.app';
+
+app.use('/api', requireApiKey);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', service: 'yaqeen-platform' });
@@ -59,11 +73,11 @@ app.post('/api/resolve', async (req, res) => {
     res.status(500).json({ error: 'Failed to resolve' });
   }
 });
+
 app.post('/api/execute', async (req, res) => {
   try {
     const { service_id, device_id } = req.body;
 
-    // 1) session
     const sessionRes = await fetch(`${PAYLOCK_URL}/v1/session`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -73,18 +87,12 @@ app.post('/api/execute', async (req, res) => {
     const sessionData = await sessionRes.json();
     const h0 = sessionData.h0;
 
-    // 2) signal
     await fetch(`${PAYLOCK_URL}/v1/signal`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        h0,
-        signal_type: "provider_ack",
-        signal_ref: "auto"
-      })
+      body: JSON.stringify({ h0, signal_type: 'provider_ack', signal_ref: 'auto' })
     });
 
-    // 3) resolve
     const resolveRes = await fetch(`${PAYLOCK_URL}/v1/resolve`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -93,17 +101,12 @@ app.post('/api/execute', async (req, res) => {
 
     const resolveData = await resolveRes.json();
 
-    res.json({
-      h0,
-      result: resolveData
-    });
-
+    res.json({ h0, result: resolveData });
   } catch (error) {
-    res.status(500).json({
-      error: "execution failed"
-    });
+    res.status(500).json({ error: 'Execution failed' });
   }
 });
+
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Yaqeen Platform running on port ${PORT}`);
