@@ -59,7 +59,51 @@ app.post('/api/resolve', async (req, res) => {
     res.status(500).json({ error: 'Failed to resolve' });
   }
 });
+app.post('/api/execute', async (req, res) => {
+  try {
+    const { service_id, device_id } = req.body;
 
+    // 1) session
+    const sessionRes = await fetch(`${PAYLOCK_URL}/v1/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ service_id, device_id })
+    });
+
+    const sessionData = await sessionRes.json();
+    const h0 = sessionData.h0;
+
+    // 2) signal
+    await fetch(`${PAYLOCK_URL}/v1/signal`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        h0,
+        signal_type: "provider_ack",
+        signal_ref: "auto"
+      })
+    });
+
+    // 3) resolve
+    const resolveRes = await fetch(`${PAYLOCK_URL}/v1/resolve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ h0 })
+    });
+
+    const resolveData = await resolveRes.json();
+
+    res.json({
+      h0,
+      result: resolveData
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      error: "execution failed"
+    });
+  }
+});
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Yaqeen Platform running on port ${PORT}`);
