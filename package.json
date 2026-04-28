@@ -3,5 +3,8 @@
   "version": "0.1.0",
   "scripts": {
     "start": "cd backend && node server.js"
+  },
+  "dependencies": {
+    "express-rate-limit": "^8.4.1"
   }
 }
