@@ -1,0 +1,7 @@
+{
+  "name": "yaqeen-platform",
+  "version": "0.1.0",
+  "scripts": {
+    "start": "cd backend && node server.js"
+  }
+}
