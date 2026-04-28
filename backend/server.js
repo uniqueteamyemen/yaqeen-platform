@@ -1,5 +1,7 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
+const fs = require('fs');
+const path = require('path');
 const app = express();
 
 const API_KEY = process.env.API_KEY || 'test-key';
@@ -13,12 +15,36 @@ function requireApiKey(req, res, next) {
 }
 
 const apiLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 20,             // 20 requests per minute
+  windowMs: 60 * 1000,
+  max: 20,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests, please try again later.' }
 });
+
+// --- نظام التسجيل الموحد ---
+const LOG_FILE = path.join(__dirname, 'logs.json');
+
+function saveLog(entry) {
+  const record = {
+    time: new Date().toISOString(),
+    ...entry
+  };
+
+  try {
+    let logs = [];
+    if (fs.existsSync(LOG_FILE)) {
+      const raw = fs.readFileSync(LOG_FILE);
+      logs = JSON.parse(raw);
+    }
+    logs.push(record);
+    fs.writeFileSync(LOG_FILE, JSON.stringify(logs, null, 2));
+    console.log(JSON.stringify(record));
+  } catch (e) {
+    console.error('log error', e.message);
+  }
+}
+// ------------------------
 
 app.use(express.json({
   verify: (req, res, buf, encoding) => {
@@ -50,6 +76,7 @@ app.post('/api/session', async (req, res) => {
       body: JSON.stringify(req.body)
     });
     const data = await response.json();
+    saveLog({ type: 'session_created', h0: data.h0 });
     res.json(data);
   } catch (error) {
     res.status(500).json({ error: 'Failed to create session' });
@@ -96,6 +123,7 @@ app.post('/api/execute', async (req, res) => {
 
     const sessionData = await sessionRes.json();
     const h0 = sessionData.h0;
+    saveLog({ type: 'session_created', h0 });
 
     await fetch(`${PAYLOCK_URL}/v1/signal`, {
       method: 'POST',
@@ -110,6 +138,7 @@ app.post('/api/execute', async (req, res) => {
     });
 
     const resolveData = await resolveRes.json();
+    saveLog({ type: 'execution_proven', h0, h1: resolveData.h1 });
 
     res.json({ h0, result: resolveData });
   } catch (error) {
