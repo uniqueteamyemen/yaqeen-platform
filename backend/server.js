@@ -1,4 +1,5 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const app = express();
 
 const API_KEY = process.env.API_KEY || 'test-key';
@@ -10,6 +11,14 @@ function requireApiKey(req, res, next) {
   }
   next();
 }
+
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 20,             // 20 requests per minute
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later.' }
+});
 
 app.use(express.json({
   verify: (req, res, buf, encoding) => {
@@ -27,6 +36,7 @@ app.use(express.static('public'));
 const PAYLOCK_URL = process.env.PAYLOCK_URL || 'https://paylock-core-production.up.railway.app';
 
 app.use('/api', requireApiKey);
+app.use('/api', apiLimiter);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', service: 'yaqeen-platform' });
