@@ -1,10 +1,15 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
-const fs = require('fs');
-const path = require('path');
+const Redis = require('ioredis');
 const app = express();
 
+// --- التعديل الأول: الثقة بالبروكسي (ضروري لـ Rate Limiting على Railway) ---
+app.set('trust proxy', 1);
+// ---------------------------------------------------------------------------
+
 const API_KEY = process.env.API_KEY || 'test-key';
+const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
+const redis = new Redis(REDIS_URL);
 
 function requireApiKey(req, res, next) {
   const key = req.headers['x-api-key'];
@@ -22,18 +27,13 @@ const apiLimiter = rateLimit({
   message: { error: 'Too many requests, please try again later.' }
 });
 
-const LOG_FILE = path.join(__dirname, 'logs.json');
-
-function saveLog(entry) {
+async function saveLog(entry) {
   const record = { time: new Date().toISOString(), ...entry };
   try {
-    let logs = [];
-    if (fs.existsSync(LOG_FILE)) {
-      const raw = fs.readFileSync(LOG_FILE);
-      logs = JSON.parse(raw);
-    }
-    logs.push(record);
-    fs.writeFileSync(LOG_FILE, JSON.stringify(logs, null, 2));
+    await redis.lpush('yaqeen:logs', JSON.stringify(record));
+    // --- التعديل الثاني: حد أقصى للسجلات (يمنع تضخم الذاكرة) ---
+    await redis.ltrim('yaqeen:logs', 0, 999);
+    // -----------------------------------------------------------
     console.log(JSON.stringify(record));
   } catch (e) {
     console.error('log error', e.message);
@@ -137,13 +137,10 @@ app.post('/api/execute', async (req, res) => {
   }
 });
 
-app.get('/api/logs', (req, res) => {
+app.get('/api/logs', async (req, res) => {
   try {
-    if (!fs.existsSync(LOG_FILE)) {
-      return res.json([]);
-    }
-    const raw = fs.readFileSync(LOG_FILE);
-    const logs = JSON.parse(raw);
+    const rawLogs = await redis.lrange('yaqeen:logs', 0, 99);
+    const logs = rawLogs.map(log => JSON.parse(log));
     res.json(logs);
   } catch (e) {
     res.status(500).json({ error: 'failed to read logs' });
