@@ -3,13 +3,19 @@ const rateLimit = require('express-rate-limit');
 const Redis = require('ioredis');
 const app = express();
 
-// --- التعديل الأول: الثقة بالبروكسي (ضروري لـ Rate Limiting على Railway) ---
 app.set('trust proxy', 1);
-// ---------------------------------------------------------------------------
 
 const API_KEY = process.env.API_KEY || 'test-key';
-const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
-const redis = new Redis(REDIS_URL);
+const REDIS_URL = process.env.REDIS_URL;
+let redis;
+
+if (REDIS_URL) {
+  redis = new Redis(REDIS_URL);
+  redis.on('connect', () => console.log('✅ Yaqeen connected to Redis'));
+  redis.on('error', (err) => console.error('Redis connection error:', err.message));
+} else {
+  console.log('ℹ️  No REDIS_URL set — logging to console only');
+}
 
 function requireApiKey(req, res, next) {
   const key = req.headers['x-api-key'];
@@ -29,15 +35,15 @@ const apiLimiter = rateLimit({
 
 async function saveLog(entry) {
   const record = { time: new Date().toISOString(), ...entry };
-  try {
-    await redis.lpush('yaqeen:logs', JSON.stringify(record));
-    // --- التعديل الثاني: حد أقصى للسجلات (يمنع تضخم الذاكرة) ---
-    await redis.ltrim('yaqeen:logs', 0, 999);
-    // -----------------------------------------------------------
-    console.log(JSON.stringify(record));
-  } catch (e) {
-    console.error('log error', e.message);
+  if (redis) {
+    try {
+      await redis.lpush('yaqeen:logs', JSON.stringify(record));
+      await redis.ltrim('yaqeen:logs', 0, 999);
+    } catch (e) {
+      console.error('Redis log error:', e.message);
+    }
   }
+  console.log(JSON.stringify(record));
 }
 
 app.use(express.json({
@@ -108,37 +114,18 @@ app.post('/api/resolve', async (req, res) => {
 app.post('/api/verify', async (req, res) => {
   try {
     const { h0, h1 } = req.body;
-
     if (!h0 || !h1) {
       return res.status(400).json({ error: 'Missing h0 or h1' });
     }
-
-    // إعادة حساب h1 من PayLock
     const response = await fetch(`${PAYLOCK_URL}/v1/resolve`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ h0 })
     });
-
     const data = await response.json();
-
     const valid = data.h1 === h1;
-
-    // تسجيل النتيجة (مهم للشهود)
-    await saveLog({
-      type: 'verification',
-      h0,
-      provided_h1: h1,
-      expected_h1: data.h1,
-      valid
-    });
-
-    res.json({
-      valid,
-      expected_h1: data.h1,
-      provided_h1: h1
-    });
-
+    await saveLog({ type: 'verification', h0, provided_h1: h1, expected_h1: data.h1, valid });
+    res.json({ valid, expected_h1: data.h1, provided_h1: h1 });
   } catch (error) {
     res.status(500).json({ error: 'Verification failed' });
   }
@@ -177,6 +164,9 @@ app.post('/api/execute', async (req, res) => {
 });
 
 app.get('/api/logs', async (req, res) => {
+  if (!redis) {
+    return res.json({ message: 'Redis not configured. Logs are console-only.' });
+  }
   try {
     const rawLogs = await redis.lrange('yaqeen:logs', 0, 99);
     const logs = rawLogs.map(log => JSON.parse(log));
