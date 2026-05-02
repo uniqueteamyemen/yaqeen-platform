@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Yaqeen Live Demo</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 40px; background: #f4f4f4; }
+    button { padding: 16px 32px; font-size: 18px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 8px; }
+    button:hover { background: #0056b3; }
+    pre { background: #fff; padding: 20px; border-radius: 8px; overflow-x: auto; margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <h2>Yaqeen Live Demo</h2>
+  <button onclick="runDemo()">Run Test</button>
+  <pre id="output"></pre>
+
+  <script>
+    async function runDemo() {
+      const output = document.getElementById("output");
+      output.innerText = "Running...";
+
+      try {
+        const res = await fetch('/api/execute', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': 'test-key'
+          },
+          body: JSON.stringify({
+            service_id: "demo",
+            device_id: "web-user"
+          })
+        });
+
+        const data = await res.json();
+        output.innerText = JSON.stringify(data, null, 2);
+
+      } catch (err) {
+        output.innerText = "Error: " + err.message;
+      }
+    }
+  </script>
+</body>
+</html>
