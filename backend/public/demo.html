@@ -4,20 +4,30 @@
   <title>Yaqeen Live Demo</title>
   <style>
     body { font-family: Arial, sans-serif; padding: 40px; background: #f4f4f4; }
-    button { padding: 16px 32px; font-size: 18px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 8px; }
+    button { padding: 16px 32px; font-size: 18px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 8px; margin-right: 10px; }
     button:hover { background: #0056b3; }
+    .verify-btn { background: #28a745; }
+    .verify-btn:hover { background: #1e7e34; }
     pre { background: #fff; padding: 20px; border-radius: 8px; overflow-x: auto; margin-top: 20px; }
+    .valid { color: #28a745; font-weight: bold; }
+    .invalid { color: #dc3545; font-weight: bold; }
   </style>
 </head>
 <body>
   <h2>Yaqeen Live Demo</h2>
-  <button onclick="runDemo()">Run Test</button>
+  <button onclick="runDemo()">1. Execute (Full Cycle)</button>
+  <button class="verify-btn" id="verifyBtn" onclick="verify()" disabled>2. Verify</button>
   <pre id="output"></pre>
 
   <script>
+    let lastH0 = null;
+    let lastH1 = null;
+
     async function runDemo() {
       const output = document.getElementById("output");
+      const verifyBtn = document.getElementById("verifyBtn");
       output.innerText = "Running...";
+      verifyBtn.disabled = true;
 
       try {
         const res = await fetch('/api/execute', {
@@ -34,6 +44,42 @@
 
         const data = await res.json();
         output.innerText = JSON.stringify(data, null, 2);
+
+        // تخزين القيم لاستخدامها في التحقق
+        lastH0 = data.h0;
+        lastH1 = data.result.h1;
+        verifyBtn.disabled = false;
+
+      } catch (err) {
+        output.innerText = "Error: " + err.message;
+      }
+    }
+
+    async function verify() {
+      const output = document.getElementById("output");
+      if (!lastH0 || !lastH1) return;
+
+      try {
+        const res = await fetch('/api/verify', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': 'test-key'
+          },
+          body: JSON.stringify({
+            h0: lastH0,
+            h1: lastH1
+          })
+        });
+
+        const data = await res.json();
+        
+        let resultText = "=== VERIFICATION RESULT ===\n\n";
+        resultText += JSON.stringify(data, null, 2);
+        resultText += "\n\n";
+        resultText += data.valid ? "✅ VALID: The H1 proof is verified!" : "❌ INVALID: The H1 proof does NOT match!";
+        
+        output.innerText = resultText;
 
       } catch (err) {
         output.innerText = "Error: " + err.message;
