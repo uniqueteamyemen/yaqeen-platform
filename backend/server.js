@@ -105,6 +105,45 @@ app.post('/api/resolve', async (req, res) => {
   }
 });
 
+app.post('/api/verify', async (req, res) => {
+  try {
+    const { h0, h1 } = req.body;
+
+    if (!h0 || !h1) {
+      return res.status(400).json({ error: 'Missing h0 or h1' });
+    }
+
+    // إعادة حساب h1 من PayLock
+    const response = await fetch(`${PAYLOCK_URL}/v1/resolve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ h0 })
+    });
+
+    const data = await response.json();
+
+    const valid = data.h1 === h1;
+
+    // تسجيل النتيجة (مهم للشهود)
+    await saveLog({
+      type: 'verification',
+      h0,
+      provided_h1: h1,
+      expected_h1: data.h1,
+      valid
+    });
+
+    res.json({
+      valid,
+      expected_h1: data.h1,
+      provided_h1: h1
+    });
+
+  } catch (error) {
+    res.status(500).json({ error: 'Verification failed' });
+  }
+});
+
 app.post('/api/execute', async (req, res) => {
   try {
     const { service_id, device_id } = req.body;
