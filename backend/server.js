@@ -72,7 +72,7 @@ app.post('/api/session', async (req, res) => {
   try {
     const response = await fetch(`${PAYLOCK_URL}/v1/session`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-api-key': API_KEY },
       body: JSON.stringify(req.body)
     });
     const data = await response.json();
@@ -87,7 +87,7 @@ app.post('/api/signal', async (req, res) => {
   try {
     const response = await fetch(`${PAYLOCK_URL}/v1/signal`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-api-key': API_KEY },
       body: JSON.stringify(req.body)
     });
     const data = await response.json();
@@ -101,7 +101,7 @@ app.post('/api/resolve', async (req, res) => {
   try {
     const response = await fetch(`${PAYLOCK_URL}/v1/resolve`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-api-key': API_KEY },
       body: JSON.stringify(req.body)
     });
     const data = await response.json();
@@ -119,7 +119,7 @@ app.post('/api/verify', async (req, res) => {
     }
     const response = await fetch(`${PAYLOCK_URL}/v1/resolve`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-api-key': API_KEY },
       body: JSON.stringify({ h0 })
     });
     const data = await response.json();
@@ -136,7 +136,7 @@ app.post('/api/execute', async (req, res) => {
     const { service_id, device_id } = req.body;
     const sessionRes = await fetch(`${PAYLOCK_URL}/v1/session`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-api-key': API_KEY },
       body: JSON.stringify({ service_id, device_id })
     });
     const sessionData = await sessionRes.json();
@@ -145,21 +145,37 @@ app.post('/api/execute', async (req, res) => {
 
     await fetch(`${PAYLOCK_URL}/v1/signal`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-api-key': API_KEY },
       body: JSON.stringify({ h0, signal_type: 'provider_ack', signal_ref: 'auto' })
     });
+    res.json({ h0, status: 'PENDING_UNLOCK' });
+  } catch (error) {
+    res.status(500).json({ error: 'Execution failed' });
+  }
+});
+
+app.post('/api/unlock', async (req, res) => {
+  try {
+    const { h0, device_fingerprint } = req.body;
+    const unlockResponse = await fetch(`${PAYLOCK_URL}/v1/unlock`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': API_KEY },
+      body: JSON.stringify({ h0, device_fingerprint: device_fingerprint || 'web-demo' })
+    });
+    const unlockData = await unlockResponse.json();
+    if (!unlockResponse.ok) return res.status(unlockResponse.status).json(unlockData);
 
     const resolveRes = await fetch(`${PAYLOCK_URL}/v1/resolve`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-api-key': API_KEY },
       body: JSON.stringify({ h0 })
     });
     const resolveData = await resolveRes.json();
-    saveLog({ type: 'execution_proven', h0, h1: resolveData.h1 });
+    await saveLog({ type: 'execution_proven', h0, h1: resolveData.h1 });
 
-    res.json({ h0, result: resolveData });
+    res.json({ unlock: unlockData, resolve: resolveData });
   } catch (error) {
-    res.status(500).json({ error: 'Execution failed' });
+    res.status(500).json({ error: 'Unlock failed' });
   }
 });
 

@@ -6,3 +6,5 @@
 [Live System Status](https://qpm5p92k.checkly-status-page.com/)
 
 The merchant platform for PayLock Core. A trust layer for digital payments.
+
+Note: The default API key `test-key` is for demo purposes only. Change it immediately before any production use.

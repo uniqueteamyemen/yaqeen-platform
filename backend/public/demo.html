@@ -15,8 +15,10 @@
 </head>
 <body>
   <h2>Yaqeen Live Demo</h2>
-  <button onclick="runDemo()">1. Execute (Full Cycle)</button>
-  <button class="verify-btn" id="verifyBtn" onclick="verify()" disabled>2. Verify</button>
+  <p><strong>Note:</strong> The default API key 'test-key' is for demo purposes only. Change it immediately before any production use.</p>
+  <button onclick="runDemo()">1. Execute</button>
+  <button id="unlockBtn" onclick="unlock()" disabled>2. Break Lock (Unlock)</button>
+  <button class="verify-btn" id="verifyBtn" onclick="verify()" disabled>3. Verify</button>
   <pre id="output"></pre>
 
   <script>
@@ -26,8 +28,10 @@
     async function runDemo() {
       const output = document.getElementById("output");
       const verifyBtn = document.getElementById("verifyBtn");
+      const unlockBtn = document.getElementById("unlockBtn");
       output.innerText = "Running...";
       verifyBtn.disabled = true;
+      unlockBtn.disabled = true;
 
       try {
         const res = await fetch('/api/execute', {
@@ -45,11 +49,43 @@
         const data = await res.json();
         output.innerText = JSON.stringify(data, null, 2);
 
-        // تخزين القيم لاستخدامها في التحقق
+        // تخزين H0 وانتظار خطوة unlock
         lastH0 = data.h0;
-        lastH1 = data.result.h1;
-        verifyBtn.disabled = false;
+        lastH1 = null;
+        unlockBtn.disabled = false;
 
+      } catch (err) {
+        output.innerText = "Error: " + err.message;
+      }
+    }
+
+    async function unlock() {
+      const output = document.getElementById("output");
+      const verifyBtn = document.getElementById("verifyBtn");
+      const unlockBtn = document.getElementById("unlockBtn");
+      if (!lastH0) return;
+
+      try {
+        const res = await fetch('/api/unlock', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': 'test-key'
+          },
+          body: JSON.stringify({
+            h0: lastH0,
+            device_fingerprint: 'web-user'
+          })
+        });
+
+        const data = await res.json();
+        output.innerText = JSON.stringify(data, null, 2);
+
+        if (data.resolve && data.resolve.h1) {
+          lastH1 = data.resolve.h1;
+          verifyBtn.disabled = false;
+          unlockBtn.disabled = true;
+        }
       } catch (err) {
         output.innerText = "Error: " + err.message;
       }
