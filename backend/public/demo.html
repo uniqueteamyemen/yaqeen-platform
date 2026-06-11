@@ -17,8 +17,8 @@
   <h2>Yaqeen Live Demo</h2>
   <p><strong>Note:</strong> The default API key 'test-key' is for demo purposes only. Change it immediately before any production use.</p>
   <button onclick="runDemo()">1. Execute</button>
-  <button id="unlockBtn" onclick="unlock()" disabled>2. Break Lock (Unlock)</button>
-  <button class="verify-btn" id="verifyBtn" onclick="verify()" disabled>3. Verify</button>
+  <button id="unlockBtn" onclick="unlock()" disabled>2. Open Service Link</button>
+  <button class="verify-btn" id="verifyBtn" onclick="verify()" disabled>3. Verify H1</button>
   <pre id="output"></pre>
 
   <script>
@@ -47,9 +47,18 @@
         });
 
         const data = await res.json();
-        output.innerText = JSON.stringify(data, null, 2);
+        if (!res.ok || !data.h0) {
+          output.innerText = JSON.stringify(data, null, 2);
+          return;
+        }
 
-        // تخزين H0 وانتظار خطوة unlock
+        output.innerText =
+          "=== LIFECYCLE STARTED ===\n\n" +
+          "H0 created.\n" +
+          "Provider released the locked service link.\n" +
+          "Waiting for user link-open signal.\n\n" +
+          JSON.stringify(data, null, 2);
+
         lastH0 = data.h0;
         lastH1 = null;
         unlockBtn.disabled = false;
@@ -79,10 +88,21 @@
         });
 
         const data = await res.json();
-        output.innerText = JSON.stringify(data, null, 2);
+        if (!res.ok || !data.h1) {
+          output.innerText = JSON.stringify(data, null, 2);
+          return;
+        }
 
-        if (data.resolve && data.resolve.h1) {
-          lastH1 = data.resolve.h1;
+        output.innerText =
+          "=== SERVICE LINK OPENED ===\n\n" +
+          "User touched the service link.\n" +
+          "The lock was broken and the device fingerprint signal was sent in the same event.\n" +
+          "User-side proof is closed.\n" +
+          "H1 generated as the final encrypted result.\n\n" +
+          JSON.stringify(data, null, 2);
+
+        if (data.h1) {
+          lastH1 = data.h1;
           verifyBtn.disabled = false;
           unlockBtn.disabled = true;
         }

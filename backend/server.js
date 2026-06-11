@@ -1,5 +1,4 @@
 const express = require('express');
-const rateLimit = require('express-rate-limit');
 const Redis = require('ioredis');
 const app = express();
 
@@ -25,13 +24,34 @@ function requireApiKey(req, res, next) {
   next();
 }
 
-const apiLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 20,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many requests, please try again later.' }
-});
+const rateLimitWindowMs = 60 * 1000;
+const rateLimitMax = 20;
+const rateLimitHits = new Map();
+
+function apiLimiter(req, res, next) {
+  const now = Date.now();
+  const key = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+  const current = rateLimitHits.get(key);
+
+  if (!current || current.resetAt <= now) {
+    rateLimitHits.set(key, { count: 1, resetAt: now + rateLimitWindowMs });
+    res.setHeader('RateLimit-Limit', rateLimitMax);
+    res.setHeader('RateLimit-Remaining', rateLimitMax - 1);
+    return next();
+  }
+
+  current.count += 1;
+  const remaining = Math.max(rateLimitMax - current.count, 0);
+  res.setHeader('RateLimit-Limit', rateLimitMax);
+  res.setHeader('RateLimit-Remaining', remaining);
+  res.setHeader('RateLimit-Reset', Math.ceil(current.resetAt / 1000));
+
+  if (current.count > rateLimitMax) {
+    return res.status(429).json({ error: 'Too many requests, please try again later.' });
+  }
+
+  next();
+}
 
 async function saveLog(entry) {
   const record = { time: new Date().toISOString(), ...entry };
@@ -76,6 +96,7 @@ app.post('/api/session', async (req, res) => {
       body: JSON.stringify(req.body)
     });
     const data = await response.json();
+    if (!response.ok) return res.status(response.status).json(data);
     saveLog({ type: 'session_created', h0: data.h0 });
     res.json(data);
   } catch (error) {
@@ -91,6 +112,7 @@ app.post('/api/signal', async (req, res) => {
       body: JSON.stringify(req.body)
     });
     const data = await response.json();
+    if (!response.ok) return res.status(response.status).json(data);
     res.json(data);
   } catch (error) {
     res.status(500).json({ error: 'Failed to send signal' });
@@ -105,6 +127,7 @@ app.post('/api/resolve', async (req, res) => {
       body: JSON.stringify(req.body)
     });
     const data = await response.json();
+    if (!response.ok) return res.status(response.status).json(data);
     res.json(data);
   } catch (error) {
     res.status(500).json({ error: 'Failed to resolve' });
@@ -123,6 +146,7 @@ app.post('/api/verify', async (req, res) => {
       body: JSON.stringify({ h0 })
     });
     const data = await response.json();
+    if (!response.ok) return res.status(response.status).json(data);
     const valid = data.h1 === h1;
     await saveLog({ type: 'verification', h0, provided_h1: h1, expected_h1: data.h1, valid });
     res.json({ valid, expected_h1: data.h1, provided_h1: h1 });
@@ -140,15 +164,23 @@ app.post('/api/execute', async (req, res) => {
       body: JSON.stringify({ service_id, device_id })
     });
     const sessionData = await sessionRes.json();
+    if (!sessionRes.ok) return res.status(sessionRes.status).json(sessionData);
     const h0 = sessionData.h0;
     saveLog({ type: 'session_created', h0 });
 
-    await fetch(`${PAYLOCK_URL}/v1/signal`, {
+    const signalRes = await fetch(`${PAYLOCK_URL}/v1/signal`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-api-key': API_KEY },
       body: JSON.stringify({ h0, signal_type: 'provider_ack', signal_ref: 'auto' })
     });
-    res.json({ h0, status: 'PENDING_UNLOCK' });
+    const signalData = await signalRes.json();
+    if (!signalRes.ok) return res.status(signalRes.status).json(signalData);
+
+    res.json({
+      h0,
+      status: 'PENDING_CLIENT_OPEN',
+      provider_signal_recorded: true
+    });
   } catch (error) {
     res.status(500).json({ error: 'Execution failed' });
   }
@@ -165,15 +197,40 @@ app.post('/api/unlock', async (req, res) => {
     const unlockData = await unlockResponse.json();
     if (!unlockResponse.ok) return res.status(unlockResponse.status).json(unlockData);
 
-    const resolveRes = await fetch(`${PAYLOCK_URL}/v1/resolve`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': API_KEY },
-      body: JSON.stringify({ h0 })
-    });
-    const resolveData = await resolveRes.json();
-    await saveLog({ type: 'execution_proven', h0, h1: resolveData.h1 });
+    let h1 = unlockData.h1;
+    let resolveData = null;
 
-    res.json({ unlock: unlockData, resolve: resolveData });
+    if (!h1) {
+      const resolveRes = await fetch(`${PAYLOCK_URL}/v1/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': API_KEY },
+        body: JSON.stringify({ h0 })
+      });
+      resolveData = await resolveRes.json();
+      if (!resolveRes.ok) return res.status(resolveRes.status).json(resolveData);
+      h1 = resolveData.h1;
+    }
+
+    if (!h1) {
+      return res.status(409).json({
+        error: 'H1 was not generated',
+        h0,
+        unlock: unlockData,
+        resolve: resolveData
+      });
+    }
+
+    await saveLog({ type: 'execution_proven', h0, h1 });
+
+    res.json({
+      h0,
+      h1,
+      status: 'EXECUTION_PROVEN',
+      proof_status: 'EXECUTION_PROVEN',
+      client_open_signal_recorded: true,
+      unlock: unlockData,
+      resolve: resolveData || { h1, status: 'EXECUTION_PROVEN' }
+    });
   } catch (error) {
     res.status(500).json({ error: 'Unlock failed' });
   }
