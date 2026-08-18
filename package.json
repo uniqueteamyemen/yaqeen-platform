@@ -2,7 +2,8 @@
   "name": "yaqeen-platform",
   "version": "0.1.0",
   "scripts": {
-    "start": "cd backend && node server.js"
+    "start": "cd backend && node server.js",
+    "test:release": "node release-tests/paylock-yaqeen.release.test.js"
   },
   "dependencies": {
     "express-rate-limit": "^8.4.1"
