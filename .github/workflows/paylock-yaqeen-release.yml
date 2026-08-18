@@ -1,0 +1,51 @@
+name: PayLock–Yaqeen release verification
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: paylock-yaqeen-release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-test:
+    name: Joint release suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out Yaqeen
+        uses: actions/checkout@v4
+
+      - name: Check out the public PayLock Core dependency
+        uses: actions/checkout@v4
+        with:
+          repository: uniqueteamyemen/paylock-core
+          ref: main
+          path: paylock-core
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Install Yaqeen dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Install PayLock Core dependencies
+        working-directory: paylock-core
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Run the joint PayLock–Yaqeen release suite
+        env:
+          PAYLOCK_CORE_DIR: ${{ github.workspace }}/paylock-core
+        run: pnpm test:release
