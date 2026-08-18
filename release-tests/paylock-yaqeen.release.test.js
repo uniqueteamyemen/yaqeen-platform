@@ -66,6 +66,23 @@ async function request(url, method, body) {
   return { response, data };
 }
 
+async function coreRequest(coreBaseUrl, method, pathName, body) {
+  const response = await fetch(`${coreBaseUrl}${pathName}`, {
+    method,
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': releaseApiKey
+    },
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+  const data = await response.json();
+  return { response, data };
+}
+
+function wait(milliseconds) {
+  return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
 async function expectProductionKeyRejection(apiKey) {
   const port = await freePort();
   const attempt = startNodeProcess(
@@ -161,10 +178,116 @@ async function run() {
   assert.equal(replay.response.status, 409, JSON.stringify(replay.data));
   assert.match(replay.data.error, /user_unlock already recorded/);
 
+  // A client may arrive before the provider response. No H1 may be issued until
+  // the delayed provider acknowledgement is recorded, after which resolve
+  // converges on exactly one H1 without a second user-unlock request.
+  const delayedSession = await request(`${baseUrl}/session`, 'POST', {
+    service_id: `delayed-provider-service-${unique}`,
+    provider_id: 'delayed-provider',
+    device_id: `delayed-device-${unique}`
+  });
+  assert.equal(delayedSession.response.status, 200, JSON.stringify(delayedSession.data));
+  const delayedUnlock = await request(`${baseUrl}/unlock`, 'POST', {
+    h0: delayedSession.data.h0,
+    device_fingerprint: `delayed-fingerprint-${unique}`
+  });
+  assert.equal(delayedUnlock.response.status, 400, JSON.stringify(delayedUnlock.data));
+  assert.equal(delayedUnlock.data.error, 'Missing required signals');
+  assert.equal(delayedUnlock.data.missing.provider_ack, true);
+  assert.equal(delayedUnlock.data.missing.user_unlock, false);
+  await wait(150);
+  const delayedAck = await request(`${baseUrl}/signal`, 'POST', {
+    h0: delayedSession.data.h0,
+    signal_type: 'provider_ack',
+    signal_ref: `late-resource-${unique}`
+  });
+  assert.equal(delayedAck.response.status, 200, JSON.stringify(delayedAck.data));
+  const delayedResolve = await request(`${baseUrl}/resolve`, 'POST', { h0: delayedSession.data.h0 });
+  assert.equal(delayedResolve.response.status, 200, JSON.stringify(delayedResolve.data));
+  assert.match(delayedResolve.data.h1, /^[a-f0-9]{64}$/);
+  const delayedUnlockReplay = await request(`${baseUrl}/unlock`, 'POST', {
+    h0: delayedSession.data.h0,
+    device_fingerprint: `delayed-fingerprint-${unique}`
+  });
+  assert.equal(delayedUnlockReplay.response.status, 409, JSON.stringify(delayedUnlockReplay.data));
+  assert.match(delayedUnlockReplay.data.error, /user_unlock already recorded/);
+  const delayedRetryResolve = await request(`${baseUrl}/resolve`, 'POST', { h0: delayedSession.data.h0 });
+  assert.equal(delayedRetryResolve.response.status, 200, JSON.stringify(delayedRetryResolve.data));
+  assert.equal(delayedRetryResolve.data.h1, delayedResolve.data.h1);
+
+  // A provider-side cancellation closes the session. Neither a later client
+  // unlock nor resolution may turn the cancelled session into an H1.
+  const cancelledReceipt = `cancel-receipt-${unique}`;
+  const cancelledSession = await request(`${baseUrl}/session`, 'POST', {
+    service_id: `cancelled-provider-service-${unique}`,
+    provider_id: 'cancelled-provider',
+    device_id: `cancelled-device-${unique}`,
+    receipt_id: cancelledReceipt
+  });
+  assert.equal(cancelledSession.response.status, 200, JSON.stringify(cancelledSession.data));
+  const cancelledAck = await request(`${baseUrl}/signal`, 'POST', {
+    h0: cancelledSession.data.h0,
+    signal_type: 'provider_ack',
+    signal_ref: `cancelled-resource-${unique}`
+  });
+  assert.equal(cancelledAck.response.status, 200, JSON.stringify(cancelledAck.data));
+  const cancellation = await coreRequest(
+    `http://127.0.0.1:${corePort}`,
+    'POST',
+    '/v1/webhook/cancel',
+    { h0: cancelledSession.data.h0, receipt_id: cancelledReceipt, reason: 'provider_aborted' }
+  );
+  assert.equal(cancellation.response.status, 200, JSON.stringify(cancellation.data));
+  assert.equal(cancellation.data.status, 'CANCELLED');
+  const cancelledUnlock = await request(`${baseUrl}/unlock`, 'POST', {
+    h0: cancelledSession.data.h0,
+    device_fingerprint: `cancelled-fingerprint-${unique}`
+  });
+  assert.equal(cancelledUnlock.response.status, 409, JSON.stringify(cancelledUnlock.data));
+
+  // A connection aborted before dispatch must not create user_unlock or H1. A
+  // later clean retry is the single effective unlock and proof-creation path.
+  const interruptedSession = await request(`${baseUrl}/session`, 'POST', {
+    service_id: `interrupted-client-service-${unique}`,
+    provider_id: 'interrupted-client-provider',
+    device_id: `interrupted-device-${unique}`
+  });
+  assert.equal(interruptedSession.response.status, 200, JSON.stringify(interruptedSession.data));
+  const interruptedAck = await request(`${baseUrl}/signal`, 'POST', {
+    h0: interruptedSession.data.h0,
+    signal_type: 'provider_ack',
+    signal_ref: `interrupted-resource-${unique}`
+  });
+  assert.equal(interruptedAck.response.status, 200, JSON.stringify(interruptedAck.data));
+  const abortController = new AbortController();
+  abortController.abort();
+  await assert.rejects(
+    fetch(`${baseUrl}/unlock`, {
+      method: 'POST',
+      signal: abortController.signal,
+      headers: { 'content-type': 'application/json', 'x-api-key': releaseApiKey },
+      body: JSON.stringify({ h0: interruptedSession.data.h0, device_fingerprint: `interrupted-fingerprint-${unique}` })
+    }),
+    error => error?.name === 'AbortError'
+  );
+  const interruptedResolve = await request(`${baseUrl}/resolve`, 'POST', { h0: interruptedSession.data.h0 });
+  assert.equal(interruptedResolve.response.status, 400, JSON.stringify(interruptedResolve.data));
+  assert.equal(interruptedResolve.data.error, 'Missing required signals');
+  assert.equal(interruptedResolve.data.missing.user_unlock, true);
+  const interruptedRetry = await request(`${baseUrl}/unlock`, 'POST', {
+    h0: interruptedSession.data.h0,
+    device_fingerprint: `interrupted-fingerprint-${unique}`
+  });
+  assert.equal(interruptedRetry.response.status, 200, JSON.stringify(interruptedRetry.data));
+  assert.match(interruptedRetry.data.h1, /^[a-f0-9]{64}$/);
+
   console.log(JSON.stringify({
     result: 'PASS',
     claim: 'local PayLock–Yaqeen release sequence',
-    steps: ['H0 session', 'provider_ack', 'user_unlock', 'single H1', 'verify', 'replay rejection'],
+    steps: [
+      'H0 session', 'provider_ack', 'user_unlock', 'single H1', 'verify', 'replay rejection',
+      'delayed provider acknowledgement', 'cancelled provider path', 'client abort before dispatch and clean retry'
+    ],
     h0_redacted: `${h0.slice(0, 8)}…`,
     h1_redacted: `${unlock.data.h1.slice(0, 8)}…`
   }));
