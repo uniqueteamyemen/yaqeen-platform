@@ -10,7 +10,7 @@ const { once } = require('node:events');
 const repoDir = path.resolve(__dirname, '..');
 const backendDir = path.join(repoDir, 'backend');
 const coreDir = process.env.PAYLOCK_CORE_DIR || path.resolve(repoDir, '..', 'paylock-core');
-const releaseApiKey = 'yaqeen-release-test-key';
+const releaseApiKey = 'yaqeen-release-test-key-0123456789';
 const platformSecret = 'yaqeen-release-test-platform-secret';
 const processes = [];
 
@@ -136,13 +136,73 @@ async function run() {
     NODE_ENV: 'production',
     API_KEY: releaseApiKey,
     PAYLOCK_URL: `http://127.0.0.1:${corePort}`,
+    PAYLOCK_PRIVATE_NETWORK: 'true',
+    YAQEEN_OPERATOR_SECRET: 'release-operator-secret-0123456789abcdef',
+    YAQEEN_SESSION_SECRET: 'release-session-secret-0123456789abcdef',
+    YAQEEN_RECORD_ENCRYPTION_KEY: 'release-record-secret-0123456789abcdef',
+    YAQEEN_PUBLIC_ORIGIN: `https://yaqeen-release-test.example:${yaqeenPort}`,
+    YAQEEN_TEST_MEMORY_STORE: 'true',
     PORT: String(yaqeenPort),
-    REDIS_URL: ''
+    REDIS_URL: 'memory://release-test'
   });
   await waitFor(`http://127.0.0.1:${yaqeenPort}/api/health`, { 'x-api-key': releaseApiKey });
 
+  const readiness = await fetch(`http://127.0.0.1:${yaqeenPort}/healthz`);
+  assert.equal(readiness.status, 200, 'The narrow readiness route must be reachable without an API key.');
+  assert.deepEqual(await readiness.json(), { status: 'ok' });
+
   const baseUrl = `http://127.0.0.1:${yaqeenPort}/api`;
   const unique = Date.now().toString(36);
+
+  // Provider operations use an authenticated operator session rather than the
+  // internal Core credential. They issue a 256-bit opaque one-time delivery
+  // ticket and never return H0/H1 to the delivery browser.
+  const operatorLogin = await fetch(`http://127.0.0.1:${yaqeenPort}/provider/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ operator_secret: 'release-operator-secret-0123456789abcdef' })
+  });
+  assert.equal(operatorLogin.status, 200);
+  const providerCookie = operatorLogin.headers.get('set-cookie');
+  assert.match(providerCookie, /yaqeen_operator=/);
+  const resourceCreate = await fetch(`http://127.0.0.1:${yaqeenPort}/provider/resources`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', cookie: providerCookie },
+    body: JSON.stringify({ title: 'Release test digital resource', delivery_url: 'https://example.test/release-resource' })
+  });
+  const resourceCreateBody = await resourceCreate.json();
+  assert.equal(resourceCreate.status, 201, JSON.stringify(resourceCreateBody));
+  const resource = resourceCreateBody.resource;
+  const ticketIssue = await fetch(`http://127.0.0.1:${yaqeenPort}/provider/tickets`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', cookie: providerCookie },
+    body: JSON.stringify({ resource_id: resource.id, expires_in_seconds: 600 })
+  });
+  const issuedTicket = await ticketIssue.json();
+  assert.equal(ticketIssue.status, 201, JSON.stringify(issuedTicket));
+  assert.match(issuedTicket.delivery_url, /\/deliver\/[a-f0-9]{64}$/);
+  assert.match(issuedTicket.notification, /constrained delivery session/);
+  const webhookDisabled = await fetch(`http://127.0.0.1:${yaqeenPort}/provider/webhook`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json', cookie: providerCookie },
+    body: JSON.stringify({ enabled: false })
+  });
+  assert.equal(webhookDisabled.status, 200);
+  assert.match(webhookDisabled.headers.get('x-yaqeen-webhook-disclosure'), /do not create.*financial responsibility/i);
+  assert.match((await webhookDisabled.json()).disclosure, /delivery notifications only/i);
+  const ticketPath = new URL(issuedTicket.delivery_url).pathname;
+  const deliveryPage = await fetch(`http://127.0.0.1:${yaqeenPort}${ticketPath}`);
+  assert.equal(deliveryPage.status, 200);
+  assert.equal((await deliveryPage.text()).includes(releaseApiKey), false, 'The browser delivery surface must not contain an internal credential.');
+  const redeem = await fetch(`http://127.0.0.1:${yaqeenPort}${ticketPath}/open`, { method: 'POST' });
+  const redeemed = await redeem.json();
+  assert.equal(redeem.status, 200, JSON.stringify(redeemed));
+  assert.equal(redeemed.status, 'delivered');
+  assert.equal(redeemed.redirect_url, 'https://example.test/release-resource');
+  assert.equal(JSON.stringify(redeemed).includes('h0'), false);
+  assert.equal(JSON.stringify(redeemed).includes('h1'), false);
+  const replayTicket = await fetch(`http://127.0.0.1:${yaqeenPort}${ticketPath}/open`, { method: 'POST' });
+  assert.ok([404, 409].includes(replayTicket.status), 'A ticket may be redeemed only once.');
 
   // The Yaqeen credential is a server-bound API credential. A browser-facing
   // or otherwise unauthenticated request cannot invoke the platform API.
@@ -300,7 +360,8 @@ async function run() {
     steps: [
       'H0 session', 'provider_ack', 'user_unlock', 'single H1', 'verify', 'replay rejection',
       'delayed provider acknowledgement', 'cancelled provider path', 'client abort before dispatch and clean retry',
-      'missing and incorrect Yaqeen server-key rejection'
+      'missing and incorrect Yaqeen server-key rejection', 'unauthenticated healthz',
+      'opaque ticket issue and one-time delivery redemption', 'optional Webhook disclosure'
     ],
     h0_redacted: `${h0.slice(0, 8)}…`,
     h1_redacted: `${unlock.data.h1.slice(0, 8)}…`

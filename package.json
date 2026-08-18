@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "scripts": {
     "start": "cd backend && node server.js",
-    "test:release": "node release-tests/paylock-yaqeen.release.test.js"
+    "test:release": "node release-tests/paylock-yaqeen.release.test.js",
+    "test:production": "node --test backend/production.unit.test.js"
   },
   "dependencies": {
     "express-rate-limit": "^8.4.1"
