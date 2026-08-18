@@ -53,13 +53,15 @@ async function waitFor(url, headers = {}) {
   throw new Error(`Timed out waiting for ${url}: ${lastError?.message || 'unknown error'}`);
 }
 
-async function request(url, method, body) {
+async function request(url, method, body, { apiKey = releaseApiKey, includeApiKey = true } = {}) {
+  const headers = {
+    'content-type': 'application/json'
+  };
+  if (includeApiKey) headers['x-api-key'] = apiKey;
+
   const response = await fetch(url, {
     method,
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': releaseApiKey
-    },
+    headers,
     body: body === undefined ? undefined : JSON.stringify(body)
   });
   const data = await response.json();
@@ -141,6 +143,17 @@ async function run() {
 
   const baseUrl = `http://127.0.0.1:${yaqeenPort}/api`;
   const unique = Date.now().toString(36);
+
+  // The Yaqeen credential is a server-bound API credential. A browser-facing
+  // or otherwise unauthenticated request cannot invoke the platform API.
+  const noKey = await request(`${baseUrl}/health`, 'GET', undefined, { includeApiKey: false });
+  assert.equal(noKey.response.status, 401, JSON.stringify(noKey.data));
+  assert.equal(noKey.data.error, 'Unauthorized');
+  const wrongKey = await request(`${baseUrl}/health`, 'GET', undefined, { apiKey: 'not-the-yaqeen-server-key' });
+  assert.equal(wrongKey.response.status, 401, JSON.stringify(wrongKey.data));
+  assert.equal(wrongKey.data.error, 'Unauthorized');
+  assert.equal(noKey.response.headers.get('x-powered-by'), null, 'Yaqeen must not disclose the Express server header.');
+
   const session = await request(`${baseUrl}/session`, 'POST', {
     service_id: `release-service-${unique}`,
     provider_id: 'release-provider',
@@ -286,7 +299,8 @@ async function run() {
     claim: 'local PayLock–Yaqeen release sequence',
     steps: [
       'H0 session', 'provider_ack', 'user_unlock', 'single H1', 'verify', 'replay rejection',
-      'delayed provider acknowledgement', 'cancelled provider path', 'client abort before dispatch and clean retry'
+      'delayed provider acknowledgement', 'cancelled provider path', 'client abort before dispatch and clean retry',
+      'missing and incorrect Yaqeen server-key rejection'
     ],
     h0_redacted: `${h0.slice(0, 8)}…`,
     h1_redacted: `${unlock.data.h1.slice(0, 8)}…`

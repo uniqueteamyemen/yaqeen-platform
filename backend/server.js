@@ -1,8 +1,10 @@
+const crypto = require('crypto');
 const express = require('express');
 const Redis = require('ioredis');
 const app = express();
 
 app.set('trust proxy', 1);
+app.disable('x-powered-by');
 
 const runtimeMode = process.env.NODE_ENV || 'development';
 const configuredApiKey = process.env.API_KEY;
@@ -26,7 +28,14 @@ if (REDIS_URL) {
 
 function requireApiKey(req, res, next) {
   const key = req.headers['x-api-key'];
-  if (key !== API_KEY) {
+
+  // This is an instance-scoped server credential. It protects Yaqeen's API
+  // boundary and is never emitted in a response or served to a browser.
+  const received = typeof key === 'string' ? Buffer.from(key) : null;
+  const expected = Buffer.from(API_KEY);
+  const valid = received && received.length === expected.length && crypto.timingSafeEqual(received, expected);
+
+  if (!valid) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   next();
@@ -85,8 +94,8 @@ app.use(express.json({
   }
 }));
 
-app.use(express.static('public'));
-
+// Yaqeen is a server-side reference platform. It has no browser-facing asset
+// route that could carry the API key; trusted provider backends call /api.
 const PAYLOCK_URL = process.env.PAYLOCK_URL || 'https://paylock-core-production.up.railway.app';
 
 app.use('/api', requireApiKey);

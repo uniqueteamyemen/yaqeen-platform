@@ -23,7 +23,7 @@ jobs:
       - name: Check out Yaqeen
         uses: actions/checkout@v4
 
-      - name: Check out the public PayLock Core dependency
+      - name: Check out the native direct PayLock Core dependency
         uses: actions/checkout@v4
         with:
           repository: uniqueteamyemen/paylock-core
@@ -45,7 +45,7 @@ jobs:
         working-directory: paylock-core
         run: pnpm install --no-frozen-lockfile
 
-      - name: Run the joint PayLock–Yaqeen release suite
+      - name: Run the direct PayLock–Yaqeen release suite
         env:
           PAYLOCK_CORE_DIR: ${{ github.workspace }}/paylock-core
         run: pnpm test:release
