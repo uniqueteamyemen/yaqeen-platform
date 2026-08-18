@@ -4,7 +4,15 @@ const app = express();
 
 app.set('trust proxy', 1);
 
-const API_KEY = process.env.API_KEY || 'test-key';
+const runtimeMode = process.env.NODE_ENV || 'development';
+const configuredApiKey = process.env.API_KEY;
+
+if (runtimeMode === 'production' && (!configuredApiKey || configuredApiKey === 'test-key')) {
+  console.error('FATAL: API_KEY must be explicitly configured and must not equal "test-key" in production.');
+  process.exit(1);
+}
+
+const API_KEY = configuredApiKey || 'test-key';
 const REDIS_URL = process.env.REDIS_URL;
 let redis;
 
