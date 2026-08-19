@@ -4,7 +4,8 @@
   "scripts": {
     "start": "cd backend && node server.js",
     "test:release": "node release-tests/paylock-yaqeen.release.test.js",
-    "test:production": "node --test backend/production.unit.test.js"
+    "test:production": "node --test backend/production.unit.test.js",
+    "test:hardening": "node --test backend/prelaunch.hardening.test.js"
   },
   "dependencies": {
     "express-rate-limit": "^8.4.1"
