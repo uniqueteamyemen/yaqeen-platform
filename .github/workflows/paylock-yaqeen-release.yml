@@ -45,6 +45,12 @@ jobs:
         working-directory: paylock-core
         run: pnpm install --no-frozen-lockfile
 
+      - name: Run Yaqeen production boundary checks
+        run: pnpm test:production
+
+      - name: Run Yaqeen pre-launch hardening gate
+        run: pnpm test:hardening
+
       - name: Run the direct PayLock–Yaqeen release suite
         env:
           PAYLOCK_CORE_DIR: ${{ github.workspace }}/paylock-core
