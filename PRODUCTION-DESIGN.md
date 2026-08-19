@@ -33,4 +33,12 @@ When enabled by a provider, Yaqeen sends a signed `delivery.lifecycle` event aft
 | `YAQEEN_PUBLIC_ORIGIN` | Canonical public Yaqeen HTTPS URL used in access links | Required. |
 
 The legacy `API_KEY` compatibility alias can remain only for a short controlled migration. It must not serve browsers, end users, or external public API consumers.
+
+## Railway production topology
+
+Railway private networking is scoped to services in the same project environment. Therefore the production `Yaqeen + PayLock` project contains two GitHub-sourced services: the Yaqeen delivery service from `uniqueteamyemen/yaqeen-platform`, and a read-only deployment of the unmodified `uniqueteamyemen/paylock-core` repository. Yaqeen resolves Core only through its same-project private service hostname and never through a public `*.railway.app` address.
+
+The existing, separate `PAYLOCK` Railway project remains an independently deployed Core service for provider-owned and external-platform integrations. It has a distinct public exposure and release path. It is not the Core companion service used by the Yaqeen delivery stack.
+
+This topology changes deployment placement only. It neither changes PayLock Core source nor makes Core credentials or H0/H1 available to browsers, end users, or public API clients.
 ***
