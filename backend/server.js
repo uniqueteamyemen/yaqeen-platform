@@ -34,6 +34,7 @@ function validateRuntimeConfig(source = process.env) {
     recordEncryptionKey: source.YAQEEN_RECORD_ENCRYPTION_KEY || (production ? '' : 'development-record-encryption-key'),
     publicOrigin: source.YAQEEN_PUBLIC_ORIGIN || 'http://localhost:4000',
     privateNetworkConfirmed: source.PAYLOCK_PRIVATE_NETWORK === 'true',
+    publicTrialBoundary: source.PAYLOCK_PUBLIC_TRIAL === 'true',
     allowTestMemoryStore: source.YAQEEN_TEST_MEMORY_STORE === 'true',
   };
   if (!production) return config;
@@ -43,11 +44,12 @@ function validateRuntimeConfig(source = process.env) {
   for (const [name, value] of Object.entries({ YAQEEN_OPERATOR_SECRET: config.operatorSecret, YAQEEN_SESSION_SECRET: config.sessionSecret, YAQEEN_RECORD_ENCRYPTION_KEY: config.recordEncryptionKey, YAQEEN_INTERNAL_API_KEY: config.internalApiKey })) {
     if (!value || value.length < 24 || value === 'test-key' || value.includes('development-')) errors.push(`${name} must be a non-test production secret.`);
   }
-  if (!config.privateNetworkConfirmed) errors.push('PAYLOCK_PRIVATE_NETWORK=true is required after verifying the private Yaqeen-to-Core boundary.');
+  if (!config.privateNetworkConfirmed && !config.publicTrialBoundary) errors.push('PAYLOCK_PRIVATE_NETWORK=true is required after verifying the private Yaqeen-to-Core boundary, or PAYLOCK_PUBLIC_TRIAL=true must explicitly authorize the protected public trial boundary.');
   if (!/^https:\/\//.test(config.publicOrigin)) errors.push('YAQEEN_PUBLIC_ORIGIN must be an HTTPS origin in production.');
   let url;
   try { url = new URL(config.paylockUrl); } catch (_) { errors.push('PAYLOCK_URL must be a valid private service URL.'); }
   if (url && /\.railway\.app$/i.test(url.hostname)) errors.push('PAYLOCK_URL must point to the private service network, not a public Railway hostname.');
+  if (config.publicTrialBoundary && config.privateNetworkConfirmed) errors.push('PAYLOCK_PUBLIC_TRIAL=true cannot be combined with PAYLOCK_PRIVATE_NETWORK=true.');
   if (config.redisUrl && config.redisUrl.startsWith('memory://') && !config.allowTestMemoryStore) errors.push('A memory Redis substitute is permitted only in the explicit automated test harness.');
   if (errors.length) throw new Error(`Yaqeen production configuration invalid: ${errors.join(' ')}`);
   return config;
