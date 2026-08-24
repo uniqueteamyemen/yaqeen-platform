@@ -145,3 +145,161 @@ test('delivery rate limiting rejects the thirteenth request in one window', asyn
     await runtime.close();
   }
 });
+
+
+test('requester starts H0 before provider acceptance and internal evidence remains encrypted', async () => {
+  const calls = [];
+  const runtime = await startApp(async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return successfulCore(url);
+  });
+  try {
+    const origin = new URL(runtime.baseUrl).origin;
+    const started = await json(`${runtime.baseUrl}/request/start`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin },
+      body: JSON.stringify({ provider_id: 'hardening-provider', service_id: 'requester-first-service', service_name: 'Requester-first service', device_id: 'requester-device' }),
+    });
+    assert.strictEqual(started.response.status, 201);
+    assert.match(started.body.request_token, /^[a-f0-9]{64}$/);
+    const requestRecord = await runtime.app.locals.yaqeen.store.get(`yaqeen:request:${started.body.request_id}`);
+    assert.ok(requestRecord.includes('h0Ciphertext'));
+    assert.strictEqual(requestRecord.includes('internal-h0-only'), false);
+    assert.deepStrictEqual(calls.map(call => new URL(call.url).pathname), ['/v1/session']);
+
+    const cookie = await providerSession(runtime.baseUrl);
+    const resource = await json(`${runtime.baseUrl}/provider/resources`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie, origin },
+      body: JSON.stringify({ title: 'Requester-first resource', delivery_url: 'https://delivery.example/requester-first' }),
+    });
+    assert.strictEqual(resource.response.status, 201);
+    const accepted = await json(`${runtime.baseUrl}/provider/requests/${started.body.request_id}/accept`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie, origin },
+      body: JSON.stringify({ provider_ref: 'provider-resource-ready-1' }),
+    });
+    assert.strictEqual(accepted.response.status, 200);
+    const ticket = await json(`${runtime.baseUrl}/provider/tickets`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie, origin },
+      body: JSON.stringify({ request_id: started.body.request_id, resource_id: resource.body.resource.id }),
+    });
+    assert.strictEqual(ticket.response.status, 201);
+    const rawTicket = new URL(ticket.body.delivery_url).pathname.split('/').pop();
+    const redeemed = await json(`${runtime.baseUrl}/deliver/${rawTicket}/open`, { method: 'POST', headers: { 'user-agent': 'hardening-requester' } });
+    assert.strictEqual(redeemed.response.status, 200);
+    assert.deepStrictEqual(calls.map(call => new URL(call.url).pathname), ['/v1/session', '/v1/signal', '/v1/unlock']);
+    const coreRecord = await runtime.app.locals.yaqeen.store.get(`yaqeen:internal-core-record:${JSON.parse(await runtime.app.locals.yaqeen.store.get(`yaqeen:ticket:${require('./server').sha256(rawTicket)}`)).id}`);
+    assert.ok(coreRecord.includes('h0Ciphertext'));
+    assert.ok(coreRecord.includes('h1Ciphertext'));
+    assert.strictEqual(coreRecord.includes('internal-h0-only'), false);
+    assert.strictEqual(coreRecord.includes('internal-h1-only'), false);
+    const status = await json(`${runtime.baseUrl}/request/status/${started.body.request_id}`, { headers: { 'x-request-token': started.body.request_token } });
+    assert.strictEqual(status.response.status, 200);
+    assert.strictEqual(status.body.status, 'DELIVERED');
+  } finally {
+    await runtime.close();
+  }
+});
+
+test('state-changing browser routes reject cross-origin requests and private delivery targets', async () => {
+  const runtime = await startApp(async (url) => successfulCore(url));
+  try {
+    const crossOriginLogin = await json(`${runtime.baseUrl}/provider/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://attacker.example' },
+      body: JSON.stringify({ operator_secret: baseEnv.YAQEEN_OPERATOR_SECRET, provider_id: 'hardening-provider' }),
+    });
+    assert.strictEqual(crossOriginLogin.response.status, 403);
+    const cookie = await providerSession(runtime.baseUrl);
+    const origin = new URL(runtime.baseUrl).origin;
+    const privateResource = await json(`${runtime.baseUrl}/provider/resources`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie, origin },
+      body: JSON.stringify({ title: 'Private target', delivery_url: 'http://127.0.0.1:8080/admin' }),
+    });
+    assert.strictEqual(privateResource.response.status, 400);
+    const crossOriginResource = await json(`${runtime.baseUrl}/provider/resources`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie, origin: 'https://attacker.example' },
+      body: JSON.stringify({ title: 'Cross-origin', delivery_url: 'https://delivery.example/resource' }),
+    });
+    assert.strictEqual(crossOriginResource.response.status, 403);
+    const privateWebhook = await json(`${runtime.baseUrl}/provider/webhook`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', cookie, origin },
+      body: JSON.stringify({ enabled: true, endpoint: 'https://127.0.0.1/webhook', secret: 'webhook-secret-that-is-deliberately-long-enough' }),
+    });
+    assert.strictEqual(privateWebhook.response.status, 400);
+    const crossOriginRequest = await json(`${runtime.baseUrl}/request/start`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://attacker.example' },
+      body: JSON.stringify({ provider_id: 'hardening-provider', service_id: 'csrf-service', device_id: 'csrf-device' }),
+    });
+    assert.strictEqual(crossOriginRequest.response.status, 403);
+  } finally {
+    await runtime.close();
+  }
+});
+
+
+test('request status requires the private requester token', async () => {
+  const runtime = await startApp(async (url) => successfulCore(url));
+  try {
+    const origin = new URL(runtime.baseUrl).origin;
+    const started = await json(`${runtime.baseUrl}/request/start`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin },
+      body: JSON.stringify({ provider_id: 'hardening-provider', service_id: 'token-service', device_id: 'token-device' }),
+    });
+    assert.strictEqual(started.response.status, 201);
+    const wrong = await json(`${runtime.baseUrl}/request/status/${started.body.request_id}`, { headers: { 'x-request-token': 'wrong-token' } });
+    assert.strictEqual(wrong.response.status, 404);
+    const correct = await json(`${runtime.baseUrl}/request/status/${started.body.request_id}`, { headers: { 'x-request-token': started.body.request_token } });
+    assert.strictEqual(correct.response.status, 200);
+  } finally {
+    await runtime.close();
+  }
+});
+
+
+test('requester, provider, and delivery interfaces are reachable and do not expose Core credentials', async () => {
+  const runtime = await startApp(async (url) => successfulCore(url));
+  try {
+    const root = await fetch(runtime.baseUrl, { redirect: 'manual' });
+    assert.strictEqual(root.status, 302);
+    assert.strictEqual(root.headers.get('location'), '/request');
+    const requester = await fetch(`${runtime.baseUrl}/request`);
+    const requesterHtml = await requester.text();
+    assert.strictEqual(requester.status, 200);
+    assert.match(requesterHtml, /Start with a/);
+    assert.match(requesterHtml, /Check request status/);
+    assert.strictEqual(requesterHtml.includes('hardening-internal-key'), false);
+    const cookie = await providerSession(runtime.baseUrl);
+    const provider = await fetch(`${runtime.baseUrl}/provider`, { headers: { cookie } });
+    const providerHtml = await provider.text();
+    assert.strictEqual(provider.status, 200);
+    assert.match(providerHtml, /Review a protected request/);
+    assert.match(providerHtml, /Accept protected request/);
+    assert.strictEqual(providerHtml.includes('hardening-internal-key'), false);
+    const resource = await json(`${runtime.baseUrl}/provider/resources`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ title: 'Interface resource', delivery_url: 'https://delivery.example/interface' }),
+    });
+    const ticket = await json(`${runtime.baseUrl}/provider/tickets`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ resource_id: resource.body.resource.id }),
+    });
+    const rawTicket = new URL(ticket.body.delivery_url).pathname.split('/').pop();
+    const delivery = await fetch(`${runtime.baseUrl}/deliver/${rawTicket}`);
+    const deliveryHtml = await delivery.text();
+    assert.strictEqual(delivery.status, 200);
+    assert.match(deliveryHtml, /Open assigned resource/);
+    assert.strictEqual(deliveryHtml.includes('hardening-internal-key'), false);
+  } finally {
+    await runtime.close();
+  }
+});

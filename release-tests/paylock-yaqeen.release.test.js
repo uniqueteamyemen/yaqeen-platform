@@ -154,29 +154,50 @@ async function run() {
   const baseUrl = `http://127.0.0.1:${yaqeenPort}/api`;
   const unique = Date.now().toString(36);
 
+  // The requester starts the protected process. H0 is created before provider acceptance,
+  // and neither H0 nor H1 is returned to the browser.
+  const requestStart = await fetch(`http://127.0.0.1:${yaqeenPort}/request/start`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', origin: `http://127.0.0.1:${yaqeenPort}` },
+    body: JSON.stringify({ provider_id: 'release-provider', service_id: `release-service-${unique}`, service_name: 'Release test service', device_id: `release-device-${unique}` })
+  });
+  const requestStarted = await requestStart.json();
+  assert.equal(requestStart.status, 201, JSON.stringify(requestStarted));
+  assert.ok(requestStarted.request_id);
+  assert.match(requestStarted.request_token, /^[a-f0-9]{64}$/);
+  assert.equal(JSON.stringify(requestStarted).includes('h0'), false);
+
   // Provider operations use an authenticated operator session rather than the
-  // internal Core credential. They issue a 256-bit opaque one-time delivery
-  // ticket and never return H0/H1 to the delivery browser.
+  // internal Core credential. They accept the existing requester session, issue
+  // an opaque one-time ticket, and never return H0/H1 to the delivery browser.
   const operatorLogin = await fetch(`http://127.0.0.1:${yaqeenPort}/provider/login`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ operator_secret: 'release-operator-secret-0123456789abcdef' })
+    headers: { 'content-type': 'application/json', origin: `http://127.0.0.1:${yaqeenPort}` },
+    body: JSON.stringify({ operator_secret: 'release-operator-secret-0123456789abcdef', provider_id: 'release-provider' })
   });
   assert.equal(operatorLogin.status, 200);
   const providerCookie = operatorLogin.headers.get('set-cookie');
   assert.match(providerCookie, /yaqeen_operator=/);
   const resourceCreate = await fetch(`http://127.0.0.1:${yaqeenPort}/provider/resources`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', cookie: providerCookie },
+    headers: { 'content-type': 'application/json', cookie: providerCookie, origin: `http://127.0.0.1:${yaqeenPort}` },
     body: JSON.stringify({ title: 'Release test digital resource', delivery_url: 'https://example.test/release-resource' })
   });
   const resourceCreateBody = await resourceCreate.json();
   assert.equal(resourceCreate.status, 201, JSON.stringify(resourceCreateBody));
   const resource = resourceCreateBody.resource;
+  const accept = await fetch(`http://127.0.0.1:${yaqeenPort}/provider/requests/${requestStarted.request_id}/accept`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', cookie: providerCookie, origin: `http://127.0.0.1:${yaqeenPort}` },
+    body: JSON.stringify({ provider_ref: `release-provider-ref-${unique}` })
+  });
+  const accepted = await accept.json();
+  assert.equal(accept.status, 200, JSON.stringify(accepted));
+  assert.equal(accepted.status, 'ACCEPTED');
   const ticketIssue = await fetch(`http://127.0.0.1:${yaqeenPort}/provider/tickets`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', cookie: providerCookie },
-    body: JSON.stringify({ resource_id: resource.id, expires_in_seconds: 600 })
+    headers: { 'content-type': 'application/json', cookie: providerCookie, origin: `http://127.0.0.1:${yaqeenPort}` },
+    body: JSON.stringify({ request_id: requestStarted.request_id, resource_id: resource.id, expires_in_seconds: 600 })
   });
   const issuedTicket = await ticketIssue.json();
   assert.equal(ticketIssue.status, 201, JSON.stringify(issuedTicket));
@@ -184,7 +205,7 @@ async function run() {
   assert.match(issuedTicket.notification, /constrained delivery session/);
   const webhookDisabled = await fetch(`http://127.0.0.1:${yaqeenPort}/provider/webhook`, {
     method: 'PUT',
-    headers: { 'content-type': 'application/json', cookie: providerCookie },
+    headers: { 'content-type': 'application/json', cookie: providerCookie, origin: `http://127.0.0.1:${yaqeenPort}` },
     body: JSON.stringify({ enabled: false })
   });
   assert.equal(webhookDisabled.status, 200);
@@ -201,6 +222,11 @@ async function run() {
   assert.equal(redeemed.redirect_url, 'https://example.test/release-resource');
   assert.equal(JSON.stringify(redeemed).includes('h0'), false);
   assert.equal(JSON.stringify(redeemed).includes('h1'), false);
+  const requesterStatus = await fetch(`http://127.0.0.1:${yaqeenPort}/request/status/${requestStarted.request_id}`, { headers: { 'x-request-token': requestStarted.request_token } });
+  const requesterStatusBody = await requesterStatus.json();
+  assert.equal(requesterStatus.status, 200, JSON.stringify(requesterStatusBody));
+  assert.equal(requesterStatusBody.status, 'DELIVERED');
+  assert.match(requesterStatusBody.notice, /encrypted, timestamped technical record/i);
   const replayTicket = await fetch(`http://127.0.0.1:${yaqeenPort}${ticketPath}/open`, { method: 'POST' });
   assert.ok([404, 409].includes(replayTicket.status), 'A ticket may be redeemed only once.');
 
